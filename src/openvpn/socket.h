@@ -192,6 +192,8 @@ struct link_socket
 # define LS_MODE_DEFAULT           0
 # define LS_MODE_TCP_LISTEN        1
 # define LS_MODE_TCP_ACCEPT_FROM   2
+# define LS_MODE_SCTP_LISTEN       3
+# define LS_MODE_SCTP_ACCEPT_FROM  4
   int mode;
 
   int resolve_retry_seconds;
@@ -441,7 +443,7 @@ bool proto_is_net(int proto);
 bool proto_is_dgram(int proto);
 bool proto_is_udp(int proto);
 bool proto_is_tcp(int proto);
-
+bool proto_is_sctp(int proto);
 
 #if UNIX_SOCK_SUPPORT
 
@@ -499,21 +501,27 @@ int openvpn_getaddrinfo (unsigned int flags,
  * Transport protocol naming and other details.
  */
 
-/* 
+/*
  * Use enum's instead of #define to allow for easier
  * optional proto support
  */
 enum proto_num {
-	PROTO_NONE, /* catch for uninitialized */
-	PROTO_UDPv4,
-	PROTO_TCPv4_SERVER,
-	PROTO_TCPv4_CLIENT,
-	PROTO_TCPv4,
-	PROTO_UDPv6,
-	PROTO_TCPv6_SERVER,
-	PROTO_TCPv6_CLIENT,
-	PROTO_TCPv6,
-	PROTO_N
+        PROTO_NONE, /* catch for uninitialized */
+        PROTO_UDPv4,
+        PROTO_UDPv6,
+        PROTO_TCPv4,
+        PROTO_TCPv4_SERVER,
+        PROTO_TCPv4_CLIENT,
+        PROTO_TCPv6,
+        PROTO_TCPv6_SERVER,
+        PROTO_TCPv6_CLIENT,
+        PROTO_SCTPv4,
+        PROTO_SCTPv4_SERVER,
+        PROTO_SCTPv4_CLIENT,
+        PROTO_SCTPv6,
+        PROTO_SCTPv6_SERVER,
+        PROTO_SCTPv6_CLIENT,
+        PROTO_N
 };
 
 int ascii2proto (const char* proto_name);
@@ -870,7 +878,7 @@ int link_socket_read_udp_posix (struct link_socket *sock,
 
 #endif
 
-/* read a TCP or UDP packet from link */
+/* read a TCP, UDP or SCTP packet from link */
 static inline int
 link_socket_read (struct link_socket *sock,
 		  struct buffer *buf,
@@ -893,6 +901,11 @@ link_socket_read (struct link_socket *sock,
       /* from address was returned by accept */
       addr_copy_sa(&from->dest, &sock->info.lsa->actual.dest);
       return link_socket_read_tcp (sock, buf);
+    }
+  else if (proto_is_sctp(sock->info.proto))
+    {
+        addr_copy_sa(&from->dest, &sock->info.lsa->actual.dest);
+        return link_socket_read_sctp_posix (sock, buf, maxsize, from);
     }
   else
     {
@@ -964,6 +977,15 @@ link_socket_write_tcp_posix (struct link_socket *sock,
   return send (sock->sd, BPTR (buf), BLEN (buf), MSG_NOSIGNAL);
 }
 
+static inline int
+link_socket_write_sctp_posix (struct link_socket *sock,
+                              struct buffer *buf,
+                              struct link_socket_actual *to)
+{
+  return sctp_sendmsg (sock->sd, BPTR(buf), BLEN(buf)
+                       , NULL, 0, 0, 0, 0, 0, 0);
+}
+
 #endif
 
 static inline int
@@ -991,6 +1013,10 @@ link_socket_write (struct link_socket *sock,
   else if (proto_is_tcp(sock->info.proto)) /* unified TCPv4 and TCPv6 */
     {
       return link_socket_write_tcp (sock, buf, to);
+    }
+  else if (proto_is_sctp(sock->info.proto)) /* unified SCTPv4 and SCTPv6 */
+    {
+      return link_socket_write_sctp(sock, buf, to);
     }
   else
     {

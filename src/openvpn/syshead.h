@@ -242,6 +242,10 @@
 #include <netinet/tcp.h>
 #endif
 
+#ifdef HAVE_NETINET_SCTP_H
+#include <netinet/sctp.h>
+#endif
+
 #endif /* TARGET_LINUX */
 
 #ifdef TARGET_SOLARIS
@@ -269,6 +273,10 @@
 
 #ifdef HAVE_NETINET_TCP_H
 #include <netinet/tcp.h>
+#endif
+
+#ifdef HAVE_NETINET_SCTP_H
+#include <netinet/sctp.h>
 #endif
 
 #endif /* TARGET_SOLARIS */
@@ -311,6 +319,10 @@
 #include <netinet/tcp.h>
 #endif
 
+#ifdef HAVE_NETINET_SCTP_H
+#include <netinet/sctp.h>
+#endif
+
 #ifdef HAVE_NET_IF_TUN_H
 #include <net/if_tun.h>
 #endif
@@ -325,6 +337,10 @@
 
 #ifdef HAVE_NETINET_TCP_H
 #include <netinet/tcp.h>
+#endif
+
+#ifdef HAVE_NETINET_SCTP_H
+#include <netinet/sctp.h>
 #endif
 
 #endif /* TARGET_NETBSD */

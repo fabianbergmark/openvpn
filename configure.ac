@@ -416,7 +416,7 @@ AC_CHECK_HEADERS([ \
 	ctype.h sys/types.h sys/socket.h \
 	signal.h unistd.h dlfcn.h \
 	netinet/in.h netinet/in_systm.h \
-	netinet/tcp.h arpa/inet.h netdb.h \
+	netinet/tcp.h netinet/sctp.h arpa/inet.h netdb.h \
 	windows.h winsock2.h ws2tcpip.h \
 ])
 AC_CHECK_HEADERS([ \
@@ -599,6 +599,12 @@ AC_CHECK_LIB(
 	[resolv],
 	[gethostbyname],
 	[SOCKETS_LIBS="${SOCKETS_LIBS} -lresolv"]
+)
+AC_CHECK_LIB(
+        [sctp],
+        [sctp_sendmsg,
+         sctp_recvmsg],
+        [SOCKETS_LIBS="${SOCKET_LIBS} -lsctp"]
 )
 AC_SUBST([SOCKETS_LIBS])
 

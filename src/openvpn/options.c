@@ -134,9 +134,9 @@ static const char usage_message[] =
   "--remote-random-hostname : Add a random string to remote DNS name.\n"
   "--mode m        : Major mode, m = 'p2p' (default, point-to-point) or 'server'.\n"
   "--proto p       : Use protocol p for communicating with peer.\n"
-  "                  p = udp (default), tcp-server, or tcp-client\n"
+  "                  p = udp (default), tcp-server, tcp-client, sctp-server or sctp-client\n"
   "--proto-force p : only consider protocol p in list of connection profiles.\n"
-  "                  p = udp6, tcp6-server, or tcp6-client (ipv6)\n"
+  "                  p = udp6, tcp6-server, tcp6-client, sctp6-server or sctp6-client (ipv6)\n"
   "--connect-retry n : For --proto tcp-client, number of seconds to wait\n"
   "                    between connection retries (default=%d).\n"
   "--connect-timeout n : For --proto tcp-client, connection timeout (in seconds).\n"
@@ -1847,6 +1847,15 @@ options_postprocess_verify_ce (const struct options *options, const struct conne
     msg (M_USAGE, "--proto tcp6 is ambiguous in this context.  Please specify --proto tcp6-server or --proto tcp6-client");
 
   /*
+   * If "proto sctp" is specified, make sure we know whether it is
+   * sctp-client or sctp-server.
+   */
+  if (ce->proto == PROTO_SCTPv4)
+    msg (M_USAGE, "--proto sctp is ambiguous in this context.  Please specify --proto sctp-server or --proto sctp-client");
+  if (ce->proto == PROTO_SCTPv6)
+    msg (M_USAGE, "--proto sctp is ambiguous in this context.  Please specify --proto sctp6-server or --proto sctp6-client");
+
+  /*
    * Sanity check on daemon/inetd modes
    */
 
@@ -2361,26 +2370,44 @@ static void
 options_postprocess_mutate_ce (struct options *o, struct connection_entry *ce)
 {
   const int dev = dev_type_enum (o->dev, o->dev_type);
-
 #if P2MP_SERVER
   if (o->server_defined || o->server_bridge_defined || o->server_bridge_proxy_dhcp)
     {
-      if (ce->proto == PROTO_TCPv4)
-	ce->proto = PROTO_TCPv4_SERVER;
-      else if (ce->proto == PROTO_TCPv6)
-	ce->proto = PROTO_TCPv6_SERVER;
+      switch (ce->proto) {
+      case PROTO_TCPv4:
+        ce->proto = PROTO_TCPv4_SERVER;
+        break;
+      case PROTO_TCPv6:
+        ce->proto = PROTO_TCPv6_SERVER;
+        break;
+      case PROTO_SCTPv4:
+        ce->proto = PROTO_SCTPv4_SERVER;
+        break;
+      case PROTO_SCTPv6:
+        ce->proto = PROTO_SCTPv6_SERVER;
+        break;
+      }
     }
 #endif
 #if P2MP
   if (o->client)
     {
-      if (ce->proto == PROTO_TCPv4)
-	ce->proto = PROTO_TCPv4_CLIENT;
-      else if (ce->proto == PROTO_TCPv6)
-	ce->proto = PROTO_TCPv6_CLIENT;
+      switch (ce->proto) {
+        case PROTO_TCPv4:
+        ce->proto = PROTO_TCPv4_CLIENT;
+        break;
+      case PROTO_TCPv6:
+        ce->proto = PROTO_TCPv6_CLIENT;
+        break;
+      case PROTO_SCTPv4:
+        ce->proto = PROTO_SCTPv4_CLIENT;
+        break;
+      case PROTO_SCTPv6:
+        ce->proto = PROTO_SCTPv6_CLIENT;
+        break;
+      }
     }
 #endif
-
   if (ce->proto == PROTO_TCPv4_CLIENT && !ce->local && !ce->local_port_defined && !ce->bind_defined)
     ce->bind_local = false;
 

@@ -693,6 +693,17 @@ create_socket_udp6 (const unsigned int flags)
   return sd;
 }
 
+static socket_descriptor_t
+create_socket_sctp (int af)
+{
+  socket_descriptor_t sd;
+
+  if ((sd = socket (af, SOCK_STREAM, IPPROTO_SCTP)) < 0)
+    msg (M_ERR, "SCTP: Cannot create SCTP socket");
+
+  return sd;
+}
+
 static void
 create_socket (struct link_socket *sock)
 {
@@ -722,6 +733,16 @@ create_socket (struct link_socket *sock)
       sock->sd = create_socket_udp6 (sock->sockflags);
       sock->sockflags |= SF_GETADDRINFO_DGRAM;
     }
+  else if (sock->info.proto == PROTO_SCTPv4_SERVER
+           || sock->info.proto == PROTO_SCTPv4_CLIENT)
+    {
+      sock->sd = create_socket_sctp (AF_INET);
+    }
+  else if (sock->info.proto == PROTO_SCTPv6_SERVER
+           || sock->info.proto == PROTO_SCTPv6_CLIENT)
+  {
+    sock->sd = create_socket_sctp (AF_INET6);
+  }
   else
     {
       ASSERT (0);
@@ -750,10 +771,10 @@ socket_do_listen (socket_descriptor_t sd,
   struct gc_arena gc = gc_new ();
   if (do_listen)
     {
-      msg (M_INFO, "Listening for incoming TCP connection on %s", 
-	   print_sockaddr (local, &gc));
+      msg (M_INFO, "Listening for incoming connection on %s",
+           print_sockaddr (local, &gc));
       if (listen (sd, 1))
-	msg (M_ERR, "TCP: listen() failed");
+        msg (M_ERR, "listen() failed");
     }
 
   /* set socket to non-blocking mode */
@@ -821,7 +842,7 @@ socket_do_accept (socket_descriptor_t sd,
 }
 
 static void
-tcp_connection_established (const struct link_socket_actual *act)
+connection_established (const struct link_socket_actual *act)
 {
   struct gc_arena gc = gc_new ();
   msg (M_INFO, "TCP connection established with %s", 
@@ -868,7 +889,7 @@ socket_listen_accept (socket_descriptor_t sd,
 	}
 
       if (status < 0)
-	msg (D_LINK_ERRORS | M_ERRNO, "TCP: select() failed");
+        msg (D_LINK_ERRORS | M_ERRNO, "TCP/SCTP: select() failed");
 
       if (status <= 0)
 	{
@@ -879,27 +900,28 @@ socket_listen_accept (socket_descriptor_t sd,
       new_sd = socket_do_accept (sd, act, nowait);
 
       if (socket_defined (new_sd))
-	{
-	  update_remote (remote_dynamic, &remote_verify, remote_changed, 0);
-	  if (addr_defined (&remote_verify)
-	      && !addr_match (&remote_verify, &act->dest))
-	    {
-	      msg (M_WARN,
-		   "TCP NOTE: Rejected connection attempt from %s due to --remote setting",
-		   print_link_socket_actual (act, &gc));
-	      if (openvpn_close_socket (new_sd))
-		msg (M_ERR, "TCP: close socket failed (new_sd)");
-	    }
-	  else
-	    break;
-	}
+        {
+          update_remote (remote_dynamic, &remote_verify, remote_changed, 0);
+          if (addr_defined (&remote_verify)
+              && !addr_match (&remote_verify, &act->dest))
+            {
+              msg (M_WARN,
+                   "TCP/SCTP NOTE: Rejected connection attempt from %s due to --remote setting",
+                   print_link_socket_actual (act, &gc));
+              if (openvpn_close_socket (new_sd))
+                msg (M_ERR, "TCP/SCTP:close socket failed (new_sd)");
+            }
+          else {
+              break;
+          }
+        }
       openvpn_sleep (1);
     }
 
-  if (!nowait && openvpn_close_socket (sd))
-    msg (M_ERR, "TCP: close socket failed (sd)");
+  //if (!nowait && openvpn_close_socket (sd))
+  //  msg (M_ERR, "TCP/SCTP: close socket failed (sd)");
 
-  tcp_connection_established (act);
+  connection_established (act);
 
   gc_free (&gc);
   return new_sd;
@@ -1006,7 +1028,91 @@ openvpn_connect (socket_descriptor_t sd,
 }
 
 void
-socket_connect (socket_descriptor_t *sd,
+socket_connect_sctp (socket_descriptor_t *sd,
+                     struct openvpn_sockaddr *local,
+                     bool bind_local,
+                     struct openvpn_sockaddr *remote,
+                     const bool connection_profiles_defined,
+                     const char *remote_dynamic,
+                     bool *remote_changed,
+                     const int connect_retry_seconds,
+                     const int connect_timeout,
+                          const int connect_retry_max,
+                     const unsigned int sockflags,
+                     volatile int *signal_received)
+{
+  struct gc_arena gc = gc_new ();
+  int retry = 0;
+
+#ifdef CONNECT_NONBLOCK
+  msg (M_INFO, "Attempting to establish SCTP connection with %s [nonblock]",
+       print_sockaddr (remote, &gc));
+#else
+  msg (M_INFO, "Attempting to establish SCTP connection with %s",
+       print_sockaddr (remote, &gc));
+#endif
+
+  while (true)
+    {
+      int status;
+
+#ifdef ENABLE_MANAGEMENT
+      if (management)
+        management_set_state (management,
+                              OPENVPN_STATE_TCP_CONNECT,
+                              NULL,
+                              (in_addr_t)0,
+                              (in_addr_t)0);
+#endif
+
+      status = openvpn_connect (*sd, remote, connect_timeout, signal_received);
+
+      get_signal (signal_received);
+      if (*signal_received)
+        goto done;
+
+      if (!status)
+        break;
+
+      msg (D_LINK_ERRORS,
+           "SCTP: connect to %s failed, will try again in %d seconds: %s",
+           print_sockaddr (remote, &gc),
+           connect_retry_seconds,
+           strerror_ts (status, &gc));
+
+      gc_reset (&gc);
+
+      openvpn_close_socket (*sd);
+      *sd = SOCKET_UNDEFINED;
+
+      if ((connect_retry_max > 0 && ++retry >= connect_retry_max) || connection_profiles_defined)
+        {
+          *signal_received = SIGUSR1;
+          goto done;
+        }
+
+      openvpn_sleep (connect_retry_seconds);
+
+      get_signal (signal_received);
+      if (*signal_received)
+        goto done;
+
+        *sd = create_socket_sctp (local->addr.sa.sa_family);
+
+      if (bind_local)
+        socket_bind (*sd, local, "SCTP Client");
+      update_remote (remote_dynamic, remote, remote_changed, sockflags);
+    }
+
+  msg (M_INFO, "SCTP connection established with %s",
+       print_sockaddr (remote, &gc));
+
+ done:
+  gc_free (&gc);
+}
+
+void
+socket_connect_tcp (socket_descriptor_t *sd,
                 struct openvpn_sockaddr *local,
                 bool bind_local,
 		struct openvpn_sockaddr *remote,
@@ -1578,45 +1684,93 @@ link_socket_init_phase2 (struct link_socket *sock,
       resolve_remote (sock, 2, &remote_dynamic, signal_received);
 
       if (*signal_received)
-	goto done;
+        goto done;
+
+      /* SCTP client/server */
+      if (sock->info.proto == PROTO_SCTPv4_SERVER
+          || sock->info.proto == PROTO_SCTPv6_SERVER)
+        {
+          switch (sock->mode)
+            {
+            case LS_MODE_DEFAULT:
+              sock->sd = socket_listen_accept (sock->sd,
+                                               &sock->info.lsa->actual,
+                                               remote_dynamic,
+                                               &remote_changed,
+                                               &sock->info.lsa->local,
+                                               true,
+                                               false,
+                                               signal_received);
+              break;
+            case LS_MODE_SCTP_LISTEN:
+              socket_do_listen (sock->sd,
+                                &sock->info.lsa->local,
+                                true,
+                                false);
+              break;
+            case LS_MODE_SCTP_ACCEPT_FROM:
+              sock->sd = socket_do_accept (sock->sd,
+                                           &sock->info.lsa->actual,
+                                           false);
+              break;
+            default:
+              ASSERT (0);
+            }
+        }
+      else if (sock->info.proto == PROTO_SCTPv4_CLIENT
+               || sock->info.proto == PROTO_SCTPv6_CLIENT)
+        {
+          socket_connect_sctp (&sock->sd,
+                               &sock->info.lsa->local,
+                               sock->bind_local,
+                               &sock->info.lsa->actual.dest,
+                               sock->connection_profiles_defined,
+                               remote_dynamic,
+                               &remote_changed,
+                               sock->connect_retry_seconds,
+                               sock->connect_timeout,
+                               sock->connect_retry_max,
+                               sock->sockflags,
+                               signal_received);
+        }
 
       /* TCP client/server */
-      if (sock->info.proto == PROTO_TCPv4_SERVER
-	  ||sock->info.proto == PROTO_TCPv6_SERVER)
-	{
-	  switch (sock->mode)
-	    {
-	    case LS_MODE_DEFAULT:
-	      sock->sd = socket_listen_accept (sock->sd,
-					       &sock->info.lsa->actual,
-					       remote_dynamic,
-					       &remote_changed,
-					       &sock->info.lsa->local,
-					       true,
-					       false,
-					       signal_received);
-	      break;
-	    case LS_MODE_TCP_LISTEN:
-	      socket_do_listen (sock->sd,
-				&sock->info.lsa->local,
-				true,
-				false);
-	      break;
-	    case LS_MODE_TCP_ACCEPT_FROM:
-	      sock->sd = socket_do_accept (sock->sd,
-					   &sock->info.lsa->actual,
-					   false);
-	      if (!socket_defined (sock->sd))
-		{
-		  *signal_received = SIGTERM;
-		  goto done;
-		}
-	      tcp_connection_established (&sock->info.lsa->actual);
-	      break;
-	    default:
-	      ASSERT (0);
-	    }
-	}
+      else if (sock->info.proto == PROTO_TCPv4_SERVER
+          ||sock->info.proto == PROTO_TCPv6_SERVER)
+        {
+          switch (sock->mode)
+            {
+            case LS_MODE_DEFAULT:
+              sock->sd = socket_listen_accept (sock->sd,
+                                               &sock->info.lsa->actual,
+                                               remote_dynamic,
+                                               &remote_changed,
+                                               &sock->info.lsa->local,
+                                               true,
+                                               false,
+                                               signal_received);
+              break;
+            case LS_MODE_TCP_LISTEN:
+              socket_do_listen (sock->sd,
+                                &sock->info.lsa->local,
+                                true,
+                                false);
+              break;
+            case LS_MODE_TCP_ACCEPT_FROM:
+              sock->sd = socket_do_accept (sock->sd,
+                                           &sock->info.lsa->actual,
+                                           false);
+              if (!socket_defined (sock->sd))
+                {
+                  *signal_received = SIGTERM;
+                  goto done;
+                }
+              connection_established (&sock->info.lsa->actual);
+              break;
+            default:
+              ASSERT (0);
+            }
+        }
       else if (sock->info.proto == PROTO_TCPv4_CLIENT
 	       ||sock->info.proto == PROTO_TCPv6_CLIENT)
 	{
@@ -1627,18 +1781,18 @@ link_socket_init_phase2 (struct link_socket *sock,
 	  const bool proxy_retry = false;
 #endif
 	  do {
-	    socket_connect (&sock->sd,
-			    &sock->info.lsa->local,
-			    sock->bind_local,
-			    &sock->info.lsa->actual.dest,
-			    sock->connection_profiles_defined,
-			    remote_dynamic,
-			    &remote_changed,
-			    sock->connect_retry_seconds,
-			    sock->connect_timeout,
-			    sock->connect_retry_max,
-			    sock->sockflags,
-			    signal_received);
+	    socket_connect_tcp (&sock->sd,
+				&sock->info.lsa->local,
+				sock->bind_local,
+				&sock->info.lsa->actual.dest,
+				sock->connection_profiles_defined,
+				remote_dynamic,
+				&remote_changed,
+				sock->connect_retry_seconds,
+				sock->connect_timeout,
+				sock->connect_retry_max,
+				sock->sockflags,
+				signal_received);
 
 	    if (*signal_received)
 	      goto done;
@@ -1675,8 +1829,8 @@ link_socket_init_phase2 (struct link_socket *sock,
 	}
 #ifdef ENABLE_SOCKS
       else if (sock->info.proto == PROTO_UDPv4 && sock->socks_proxy)
-	{
-	  socket_connect (&sock->ctrl_sd,
+        {
+          socket_connect_tcp (&sock->ctrl_sd,
                           &sock->info.lsa->local,
                           sock->bind_local,
 			  &sock->info.lsa->actual.dest,
@@ -2441,15 +2595,21 @@ struct proto_names {
 
 /* Indexed by PROTO_x */
 static const struct proto_names proto_names[PROTO_N] = {
-  {"proto-uninitialized",        "proto-NONE",0,0, AF_UNSPEC},
-  {"udp",        "UDPv4",1,1, AF_INET},
-  {"tcp-server", "TCPv4_SERVER",0,1, AF_INET},
-  {"tcp-client", "TCPv4_CLIENT",0,1, AF_INET},
-  {"tcp",        "TCPv4",0,1, AF_INET},
-  {"udp6"       ,"UDPv6",1,1, AF_INET6},
-  {"tcp6-server","TCPv6_SERVER",0,1, AF_INET6},
-  {"tcp6-client","TCPv6_CLIENT",0,1, AF_INET6},
-  {"tcp6"       ,"TCPv6",0,1, AF_INET6},
+  {"proto-uninitialized", "proto-NONE"   , 0, 0, AF_UNSPEC },
+  {"udp"                , "UDPv4"        , 1, 1, AF_INET   },
+  {"udp6"               , "UDPv6"        , 1, 1, AF_INET6  },
+  {"tcp"                , "TCPv4"        , 0, 1, AF_INET   },
+  {"tcp-server"         , "TCPv4_SERVER" , 0, 1, AF_INET   },
+  {"tcp-client"         , "TCPv4_CLIENT" , 0, 1, AF_INET   },
+  {"tcp6"               , "TCPv6"        , 0, 1, AF_INET6  },
+  {"tcp6-server"        , "TCPv6_SERVER" , 0, 1, AF_INET6  },
+  {"tcp6-client"        , "TCPv6_CLIENT" , 0, 1, AF_INET6  },
+  {"sctp"               , "SCTPv4"       , 0, 1, AF_INET   },
+  {"sctp-server"        , "SCTPv4_SERVER", 0, 1, AF_INET   },
+  {"sctp-client"        , "SCTPv4_CLIENT", 0, 1, AF_INET   },
+  {"sctp6"              , "SCTPv6"       , 0, 1, AF_INET6  },
+  {"sctp6-server"       , "SCTPv6_SERVER", 0, 1, AF_INET6  },
+  {"sctp6-client"       , "SCTPv6_CLIENT", 0, 1, AF_INET6  },
 };
 
 bool
@@ -2471,17 +2631,23 @@ proto_is_udp(int proto)
 {
   if (proto < 0 || proto >= PROTO_N)
     ASSERT(0);
-  return proto_names[proto].is_dgram&&proto_names[proto].is_net;
+  return (proto >= 1) && (proto <= 2);
 }
 bool
 proto_is_tcp(int proto)
 {
   if (proto < 0 || proto >= PROTO_N)
     ASSERT(0);
-  return (!proto_names[proto].is_dgram)&&proto_names[proto].is_net;
+  return (proto >= 3) && (proto <= 8);
 }
-
-unsigned short 
+bool
+proto_is_sctp(int proto)
+{
+  if (proto < 0 || proto >= PROTO_N)
+    ASSERT(0);
+  return (proto >= 9) && (proto <= 14);
+}
+unsigned short
 proto_sa_family(int proto)
 {
   if (proto < 0 || proto >= PROTO_N)
@@ -2588,6 +2754,10 @@ proto_remote (int proto, bool remote)
       case PROTO_TCPv6_SERVER: return PROTO_TCPv4_CLIENT;
       case PROTO_TCPv6_CLIENT: return PROTO_TCPv4_SERVER;
       case PROTO_UDPv6: return PROTO_UDPv4;
+      case PROTO_SCTPv4_SERVER: return PROTO_SCTPv4_CLIENT;
+      case PROTO_SCTPv4_CLIENT: return PROTO_SCTPv4_SERVER;
+      case PROTO_SCTPv6_SERVER: return PROTO_SCTPv4_CLIENT;
+      case PROTO_SCTPv6_CLIENT: return PROTO_SCTPv4_SERVER;
       }
     }
   else
@@ -2597,6 +2767,8 @@ proto_remote (int proto, bool remote)
       case PROTO_TCPv6_SERVER: return PROTO_TCPv4_SERVER;
       case PROTO_TCPv6_CLIENT: return PROTO_TCPv4_CLIENT;
       case PROTO_UDPv6: return PROTO_UDPv4;
+      case PROTO_SCTPv6_SERVER: return PROTO_SCTPv4_SERVER;
+      case PROTO_SCTPv6_CLIENT: return PROTO_SCTPv4_CLIENT;
       }
     }
   return proto;
@@ -2763,6 +2935,21 @@ link_socket_read_udp_posix (struct link_socket *sock,
   return buf->len;
 }
 
+int
+link_socket_read_sctp_posix (struct link_socket *sock,
+                             struct buffer *buf,
+                             int maxsize,
+                             struct link_socket_actual *from)
+{
+  socklen_t fromlen = sizeof (from->dest.addr);
+  addr_zero_host (&from->dest);
+  ASSERT (buf_safe (buf, maxsize));
+  buf->len = sctp_recvmsg (sock->sd, BPTR (buf), maxsize,
+                           &from->dest.addr.sa, &fromlen,
+                           NULL, NULL);
+  return buf->len;
+}
+
 #endif
 
 /*
@@ -2782,7 +2969,21 @@ link_socket_write_tcp (struct link_socket *sock,
 #ifdef WIN32
   return link_socket_write_win32 (sock, buf, to);
 #else
-  return link_socket_write_tcp_posix (sock, buf, to);  
+  return link_socket_write_tcp_posix (sock, buf, to);
+#endif
+}
+
+int
+link_socket_write_sctp (struct link_socket *sock,
+                        struct buffer *buf,
+                        struct link_socket_actual *to)
+{
+  packet_size_type len = BLEN (buf);
+  dmsg (D_STREAM_DEBUG, "STREAM: WRITE %d offset=%d", (int)len, buf->offset);
+  ASSERT (len <= sock->stream_buf.maxlen);
+#ifdef WIN32
+#else
+  return link_socket_write_sctp_posix (sock, buf, to);
 #endif
 }
 
