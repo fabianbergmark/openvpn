@@ -3307,7 +3307,9 @@ void
 init_instance (struct context *c, const struct env_set *env, const unsigned int flags)
 {
   const struct options *options = &c->options;
-  const bool child = (c->mode == CM_CHILD_TCP || c->mode == CM_CHILD_UDP);
+  const bool child = (c->mode == CM_CHILD_TCP ||
+                      c->mode == CM_CHILD_UDP ||
+                      c->mode == CM_CHILD_SCTP);
   int link_socket_mode = LS_MODE_DEFAULT;
 
   /* init garbage collection level */
@@ -3343,6 +3345,14 @@ init_instance (struct context *c, const struct env_set *env, const unsigned int 
       else if (c->mode == CM_CHILD_TCP)
 	link_socket_mode = LS_MODE_TCP_ACCEPT_FROM;
     }
+  else if (c->options.ce.proto == PROTO_SCTPv4_SERVER
+           || c->options.ce.proto == PROTO_SCTPv6_SERVER)
+      {
+        if (c->mode == CM_TOP)
+          link_socket_mode = LS_MODE_SCTP_LISTEN;
+        else if (c->mode == CM_CHILD_SCTP)
+          link_socket_mode = LS_MODE_SCTP_ACCEPT_FROM;
+      }
 
   /* should we disable paging? */
   if (c->first_time && options->mlock)
@@ -3399,14 +3409,16 @@ init_instance (struct context *c, const struct env_set *env, const unsigned int 
   /* our wait-for-i/o objects, different for posix vs. win32 */
   if (c->mode == CM_P2P)
     do_event_set_init (c, SHAPER_DEFINED (&c->options));
-  else if (c->mode == CM_CHILD_TCP)
+  else if (c->mode == CM_CHILD_TCP
+	   || c->mode == CM_CHILD_SCTP)
     do_event_set_init (c, false);
 
   /* initialize HTTP or SOCKS proxy object at scope level 2 */
   init_proxy (c, 2);
 
   /* allocate our socket object */
-  if (c->mode == CM_P2P || c->mode == CM_TOP || c->mode == CM_CHILD_TCP)
+  if (c->mode == CM_P2P || c->mode == CM_TOP ||
+      c->mode == CM_CHILD_TCP || c->mode == CM_CHILD_SCTP)
     do_link_socket_new (c);
 
 #ifdef ENABLE_FRAGMENT
@@ -3442,7 +3454,7 @@ init_instance (struct context *c, const struct env_set *env, const unsigned int 
   do_init_frame_tls (c);
 
   /* init workspace buffers whose size is derived from frame size */
-  if (c->mode == CM_P2P || c->mode == CM_CHILD_TCP)
+  if (c->mode == CM_P2P || c->mode == CM_CHILD_TCP || c->mode == CM_CHILD_SCTP)
     do_init_buffers (c);
 
 #ifdef ENABLE_FRAGMENT
@@ -3455,7 +3467,8 @@ init_instance (struct context *c, const struct env_set *env, const unsigned int 
   do_init_mssfix (c);
 
   /* bind the TCP/UDP socket */
-  if (c->mode == CM_P2P || c->mode == CM_TOP || c->mode == CM_CHILD_TCP)
+  if (c->mode == CM_P2P || c->mode == CM_TOP ||
+      c->mode == CM_CHILD_TCP || c->mode == CM_CHILD_SCTP)
     do_init_socket_1 (c, link_socket_mode);
 
   /* initialize tun/tap device object,
@@ -3492,7 +3505,8 @@ init_instance (struct context *c, const struct env_set *env, const unsigned int 
   do_uid_gid_chroot (c, c->c2.did_open_tun);
 
   /* finalize the TCP/UDP socket */
-  if (c->mode == CM_P2P || c->mode == CM_TOP || c->mode == CM_CHILD_TCP)
+  if (c->mode == CM_P2P || c->mode == CM_TOP
+      || c->mode == CM_CHILD_TCP || c->mode == CM_CHILD_SCTP)
     do_init_socket_2 (c);
 
   /* initialize timers */
@@ -3541,6 +3555,7 @@ close_instance (struct context *c)
     if (c->mode == CM_P2P
 	|| c->mode == CM_CHILD_TCP
 	|| c->mode == CM_CHILD_UDP
+        || c->mode == CM_CHILD_SCTP
 	|| c->mode == CM_TOP)
       {
 	/* if xinetd/inetd mode, don't allow restart */
@@ -3615,7 +3630,14 @@ inherit_context_child (struct context *dest,
   CLEAR (*dest);
 
   /* proto_is_dgram will ASSERT(0) if proto is invalid */
-  dest->mode = proto_is_dgram(src->options.ce.proto)? CM_CHILD_UDP : CM_CHILD_TCP;
+  if (proto_is_dgram(src->options.ce.proto))
+      dest->mode = CM_CHILD_UDP;
+  else if (proto_is_tcp(src->options.ce.proto))
+      dest->mode = CM_CHILD_TCP;
+  else if (proto_is_sctp(src->options.ce.proto))
+      dest->mode = CM_CHILD_SCTP;
+  else
+      ASSERT(0);
 
   dest->gc = gc_new ();
 
@@ -3637,7 +3659,7 @@ inherit_context_child (struct context *dest,
   dest->options = src->options;
   options_detach (&dest->options);
 
-  if (dest->mode == CM_CHILD_TCP)
+  if (dest->mode == CM_CHILD_TCP || dest->mode == CM_CHILD_SCTP)
     {
       /*
        * The CM_TOP context does the socket listen(),

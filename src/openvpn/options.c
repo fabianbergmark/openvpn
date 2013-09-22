@@ -2029,9 +2029,11 @@ options_postprocess_verify_ce (const struct options *options, const struct conne
       if (options->pull)
 	msg (M_USAGE, "--pull cannot be used with --mode server");
       if (!(proto_is_udp(ce->proto) || ce->proto == PROTO_TCPv4_SERVER
-	    || ce->proto == PROTO_TCPv6_SERVER))
+            || ce->proto == PROTO_TCPv6_SERVER
+            || ce->proto == PROTO_SCTPv4_SERVER
+            || ce->proto == PROTO_SCTPv6_SERVER))
 	msg (M_USAGE, "--mode server currently only supports "
-	     "--proto udp or --proto tcp-server or proto tcp6-server");
+             "--proto udp or --proto tcp-server, --proto tcp6-server, --proto sctp-server or --proto sctp6-server");
 #if PORT_SHARE
       if ((options->port_share_host || options->port_share_port) && 
 	  (ce->proto != PROTO_TCPv4_SERVER && ce->proto != PROTO_TCPv6_SERVER))
@@ -2065,9 +2067,11 @@ options_postprocess_verify_ce (const struct options *options, const struct conne
       if (options->ipchange)
 	msg (M_USAGE, "--ipchange cannot be used with --mode server (use --client-connect instead)");
       if (!(proto_is_dgram(ce->proto) || ce->proto == PROTO_TCPv4_SERVER
-	    || ce->proto == PROTO_TCPv6_SERVER))
+            || ce->proto == PROTO_TCPv6_SERVER
+            || ce->proto == PROTO_SCTPv4_SERVER
+            || ce->proto == PROTO_SCTPv6_SERVER))
 	msg (M_USAGE, "--mode server currently only supports "
-	     "--proto udp or --proto tcp-server or --proto tcp6-server");
+             "--proto udp or --proto tcp-server, --proto tcp6-server, --proto sctp-server or --proto sctp6-server");
       if (!proto_is_udp(ce->proto) && (options->cf_max || options->cf_per))
 	msg (M_USAGE, "--connect-freq only works with --mode server --proto udp.  Try --max-clients instead.");
       if (!(dev == DEV_TYPE_TAP || (dev == DEV_TYPE_TUN && options->topology == TOP_SUBNET)) && options->ifconfig_pool_netmask)

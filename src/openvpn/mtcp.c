@@ -155,7 +155,8 @@ multi_tcp_instance_specific_init (struct multi_context *m, struct multi_instance
 
   ASSERT (mi->context.c2.link_socket);
   ASSERT (mi->context.c2.link_socket->info.lsa);
-  ASSERT (mi->context.c2.link_socket->mode == LS_MODE_TCP_ACCEPT_FROM);
+  ASSERT (mi->context.c2.link_socket->mode == LS_MODE_TCP_ACCEPT_FROM
+          || mi->context.c2.link_socket->mode == LS_MODE_SCTP_ACCEPT_FROM);
   ASSERT (mi->context.c2.link_socket->info.lsa->actual.dest.addr.sa.sa_family == AF_INET
 	  || mi->context.c2.link_socket->info.lsa->actual.dest.addr.sa.sa_family == AF_INET6
 	  );

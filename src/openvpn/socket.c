@@ -805,13 +805,13 @@ socket_do_accept (socket_descriptor_t sd,
       new_sd = getpeername (sd, &act->dest.addr.sa, &remote_len);
 
       if (!socket_defined (new_sd))
-	msg (D_LINK_ERRORS | M_ERRNO, "TCP: getpeername() failed");
+        msg (D_LINK_ERRORS | M_ERRNO, "TCP/SCTP: getpeername() failed");
       else
 	new_sd = sd;
     }
 #else
   if (nowait)
-    msg (M_WARN, "TCP: this OS does not provide the getpeername() function");
+    msg (M_WARN, "TCP/SCTP: this OS does not provide the getpeername() function");
 #endif
   else
     {
@@ -829,12 +829,12 @@ socket_do_accept (socket_descriptor_t sd,
 
   if (!socket_defined (new_sd))
     {
-      msg (D_LINK_ERRORS | M_ERRNO, "TCP: accept(%d) failed", sd);
+      msg (D_LINK_ERRORS | M_ERRNO, "TCP/SCTP: accept(%d) failed", sd);
     }
   /* only valid if we have remote_len_af!=0 */
   else if (remote_len_af && remote_len != remote_len_af)
     {
-      msg (D_LINK_ERRORS, "TCP: Received strange incoming connection with unknown address length=%d", remote_len);
+      msg (D_LINK_ERRORS, "TCP/SCTP: Received strange incoming connection with unknown address length=%d", remote_len);
       openvpn_close_socket (new_sd);
       new_sd = SOCKET_UNDEFINED;
     }
@@ -845,7 +845,7 @@ static void
 connection_established (const struct link_socket_actual *act)
 {
   struct gc_arena gc = gc_new ();
-  msg (M_INFO, "TCP connection established with %s", 
+  msg (M_INFO, "Connection established with %s",
        print_link_socket_actual (act, &gc));
   gc_free (&gc);
 }
@@ -1303,7 +1303,7 @@ resolve_bind_local (struct link_socket *sock)
           socket_bind (sock->ctrl_sd, &sock->info.lsa->local, "SOCKS");
       else
 #endif
-          socket_bind (sock->sd, &sock->info.lsa->local, "TCP/UDP");
+          socket_bind (sock->sd, &sock->info.lsa->local, "TCP/UDP/SCTP");
     }
   gc_free (&gc);
 }
@@ -1536,6 +1536,14 @@ link_socket_init_phase1 (struct link_socket *sock,
       ASSERT (!sock->inetd);
       sock->sd = accept_from->sd;
     }
+  else if (mode == LS_MODE_SCTP_ACCEPT_FROM)
+    {
+      ASSERT (accept_from);
+      ASSERT (sock->info.proto == PROTO_SCTPv4_SERVER
+              || sock->info.proto == PROTO_SCTPv6_SERVER);
+      ASSERT (!sock->inetd);
+      sock->sd = accept_from->sd;
+    }
 
   if (false)
     ;
@@ -1594,7 +1602,8 @@ link_socket_init_phase1 (struct link_socket *sock,
       ASSERT (socket_defined (inetd_socket_descriptor));
       sock->sd = inetd_socket_descriptor;
     }
-  else if (mode != LS_MODE_TCP_ACCEPT_FROM)
+  else if (!(mode == LS_MODE_TCP_ACCEPT_FROM
+             || mode == LS_MODE_SCTP_ACCEPT_FROM))
     {
       create_socket (sock);
 
@@ -1712,6 +1721,13 @@ link_socket_init_phase2 (struct link_socket *sock,
               sock->sd = socket_do_accept (sock->sd,
                                            &sock->info.lsa->actual,
                                            false);
+              msg (M_INFO, "Accepted socket %d", sock->sd);
+              if (!socket_defined (sock->sd))
+              {
+                  *signal_received = SIGTERM;
+                  goto done;
+              }
+              connection_established (&sock->info.lsa->actual);
               break;
             default:
               ASSERT (0);
