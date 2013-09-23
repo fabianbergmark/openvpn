@@ -2963,6 +2963,8 @@ link_socket_read_sctp_posix (struct link_socket *sock,
   buf->len = sctp_recvmsg (sock->sd, BPTR (buf), maxsize,
                            &from->dest.addr.sa, &fromlen,
                            NULL, NULL);
+  if (!buf->len)
+      sock->stream_reset = true;
   return buf->len;
 }
 
